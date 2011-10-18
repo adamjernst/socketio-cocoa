@@ -194,19 +194,26 @@
   [self onDisconnect];
 }
 
-- (void)setTimeout {  
+- (void)setTimeout {
+  // If the heartbeat timer is the last remaining reference to self, 
+  // invalidating it will immediately release self and then creating a new timer
+  // will fail since we're already deallocated. Prevent this by carefully 
+  // creating a new timer first (which retains self) and *then* invalidating 
+  // the old one.
+  
+  NSTimer *t = [NSTimer scheduledTimerWithTimeInterval:_heartbeatTimeout
+                                               target:self 
+                                             selector:@selector(onTimeout) 
+                                             userInfo:nil 
+                                               repeats:NO];
+  
   if (_timeout != nil) {
     [_timeout invalidate];
     [_timeout release];
     _timeout = nil;
   }
   
-  _timeout = [[NSTimer scheduledTimerWithTimeInterval:_heartbeatTimeout
-                                               target:self 
-                                             selector:@selector(onTimeout) 
-                                             userInfo:nil 
-                                              repeats:NO] retain];
-  
+  _timeout = [t retain];
 }
 
 - (void)onHeartbeat:(NSString *)heartbeat {
