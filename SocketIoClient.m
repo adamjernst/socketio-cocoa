@@ -250,8 +250,6 @@
   _isConnecting = NO;
   self.sessionId = nil;
   
-  [_queue removeAllObjects];
-  
   if (wasConnected && _delegate != nil) {
     [_delegate socketIoClientDidDisconnect:self];
   }
