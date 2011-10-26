@@ -13,14 +13,15 @@
 - (void)log:(NSString *)message;
 - (NSString *)encode:(NSArray *)messages;
 - (void)onDisconnect;
+- (void)onError:(NSError *)error;
 - (void)notifyMessagesSent:(NSArray *)messages;
 @end
 
 @implementation SocketIoClient
 
 @synthesize sessionId = _sessionId, delegate = _delegate, connectTimeout = _connectTimeout, 
-            tryAgainOnConnectTimeout = _tryAgainOnConnectTimeout, heartbeatTimeout = _heartbeatTimeout,
-            isConnecting = _isConnecting, isConnected = _isConnected, host = _host, port = _port;
+            heartbeatTimeout = _heartbeatTimeout, isConnecting = _isConnecting, 
+            isConnected = _isConnected, host = _host, port = _port;
 
 - (id)initWithHost:(NSString *)host port:(NSInteger)port {
   if (self = [super init]) {
@@ -29,8 +30,12 @@
     _queue = [[NSMutableArray array] retain];
     
     _connectTimeout = 5.0;
-    _tryAgainOnConnectTimeout = YES;
     _heartbeatTimeout = 15.0;
+    
+    NSString *URL = [NSString stringWithFormat:@"ws://%@:%d/socket.io/websocket",
+                     _host,
+                     _port];
+    _webSocket = [[WebSocket alloc] initWithURLString:URL delegate:self];
   }
   return self;
 }
@@ -46,11 +51,10 @@
 
 - (void)checkIfConnected {
   if (!_isConnected) {
+    [self onError:[NSError errorWithDomain:SocketIoClientErrorDomain 
+                                      code:SocketIoClientErrorConnectionTimeout
+                                  userInfo:nil]];
     [self disconnect];
-    
-    if (_tryAgainOnConnectTimeout) {
-      [self connect];
-    }
   }
 }
 
@@ -63,17 +67,6 @@
     
     _isConnecting = YES;
     
-    NSString *URL = [NSString stringWithFormat:@"ws://%@:%d/socket.io/websocket",
-                     _host,
-                     _port];
-    
-    [self log:[NSString stringWithFormat:@"Opening %@", URL]];
-    
-    [_webSocket release];
-    _webSocket = nil;
-    
-    _webSocket = [[WebSocket alloc] initWithURLString:URL delegate:self];
-    
     [_webSocket open];
     
     if (_connectTimeout > 0.0) {
@@ -84,8 +77,18 @@
 
 - (void)disconnect {
   [self log:@"Disconnect"];
-  [_webSocket close];
-  [self onDisconnect];
+  // Close the underlying websocket, if it's connected, which should trigger
+  // -webSocketDidClose: when the disconnection is completed (which will in turn
+  // call onDisconnect).
+  // If the socket is not connected, just do the bookkeeping by calling 
+  // -onDisconnect.
+  // Note that [_webSocket connected] is not the same as our ivar _isConnected;
+  // the latter waits for the Socketio handshake.
+  if ([_webSocket connected]) {
+    [_webSocket close];
+  } else {
+    [self onDisconnect];
+  }
 }
 
 - (void)send:(NSString *)data isJSON:(BOOL)isJSON {
@@ -191,7 +194,13 @@
 
 - (void)onTimeout {
   [self log:@"Timed out waiting for heartbeat."];
-  [self onDisconnect];
+  // Explicitly disconnect if the heartbeat timer times out. After 
+  // disconnection, you will not receive any more messages unless you explicitly
+  // reconnect. (Previous versions of this library sent a 
+  // socketIoClientDidDisconnect: message to the delegate, but did not actually
+  // close the connection, meaning the connection could miraculously reopen if
+  // a message was later received.)
+  [self disconnect];
 }
 
 - (void)setTimeout {
@@ -236,11 +245,16 @@
   
   [self doQueue];
   
-  if (_delegate != nil) {
+  if ([_delegate respondsToSelector:@selector(socketIoClientDidConnect:)]) {
     [_delegate socketIoClientDidConnect:self];
   }
   
   [self setTimeout];
+  
+  // Clear any checkIfTimeout pending calls since we're now connected.
+  // Otherwise if we are connected and immediately disconnected, a spurrious
+  // timeout error could be generated.
+  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(checkIfConnected) object:nil];
 }
 
 - (void)onDisconnect {
@@ -250,7 +264,7 @@
   _isConnecting = NO;
   self.sessionId = nil;
   
-  if (wasConnected && _delegate != nil) {
+  if (wasConnected && [_delegate respondsToSelector:@selector(socketIoClientDidDisconnect:)]) {
     [_delegate socketIoClientDidDisconnect:self];
   }
 }
@@ -264,11 +278,11 @@
   } else if ([[message substringWithRange:NSMakeRange(0, 3)] isEqualToString:@"~h~"]) {
     [self onHeartbeat:[message substringFromIndex:3]];
   } else if ([[message substringWithRange:NSMakeRange(0, 3)] isEqualToString:@"~j~"]) {
-    if (_delegate != nil) {
+    if ([_delegate respondsToSelector:@selector(socketIoClient:didReceiveMessage:isJSON:)]) {
       [_delegate socketIoClient:self didReceiveMessage:[message substringFromIndex:3] isJSON:YES];
     }
   } else {
-    if (_delegate != nil) {
+    if ([_delegate respondsToSelector:@selector(socketIoClient:didReceiveMessage:isJSON:)]) {
       [_delegate socketIoClient:self didReceiveMessage:message isJSON:NO];
     }
   }
@@ -284,10 +298,17 @@
   }
 }
 
+- (void)onError:(NSError *)error {
+  if ([_delegate respondsToSelector:@selector(socketIoClient:didFailWithError:)]) {
+    [_delegate socketIoClient:self didFailWithError:error];
+  }
+}
+
 #pragma mark WebSocket Delegate Methods
 
 - (void)webSocket:(WebSocket *)ws didFailWithError:(NSError *)error {
   [self log:[NSString stringWithFormat:@"Connection failed with error: %@", [error localizedDescription]]];
+  [self onError:error];
 }
 
 - (void)webSocketDidClose:(WebSocket*)webSocket {

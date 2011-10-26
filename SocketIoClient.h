@@ -11,13 +11,28 @@
 @class WebSocket;
 @protocol SocketIoClientDelegate;
 
+extern NSString *SocketIoClientErrorDomain;
+
+enum {
+  /**
+   * ConnectionTimeout indicates an error waiting for the SocketIo sessionid
+   * handshake. It is also possible to receive an underlying connection timeout
+   * error (due to WebSocket handshake timeout or TCP timeout). 
+   */
+  SocketIoClientErrorConnectionTimeout,
+  /**
+   * If the heartbeat times out, the connection is closed after you receive this
+   * error.
+   */
+  SocketIoClientErrorHeartbeatTimeout,
+};
+
 @interface SocketIoClient : NSObject {
   NSString *_host;
   NSInteger _port;
   WebSocket *_webSocket;
   
   NSTimeInterval _connectTimeout;
-  BOOL _tryAgainOnConnectTimeout;
   
   NSTimeInterval _heartbeatTimeout;
   
@@ -42,8 +57,6 @@
 @property (nonatomic, assign) id<SocketIoClientDelegate> delegate;
 
 @property (nonatomic, assign) NSTimeInterval connectTimeout;
-@property (nonatomic, assign) BOOL tryAgainOnConnectTimeout;
-
 @property (nonatomic, assign) NSTimeInterval heartbeatTimeout;
 
 - (id)initWithHost:(NSString *)host port:(NSInteger)port;
@@ -62,17 +75,34 @@
 
 @protocol SocketIoClientDelegate <NSObject>
 
+@optional
+
 /**
  * Message is always returned as a string, even when the message was meant to come
  * in as a JSON object.  Decoding the JSON is left as an exercise for the receiver.
  */
 - (void)socketIoClient:(SocketIoClient *)client didReceiveMessage:(NSString *)message isJSON:(BOOL)isJSON;
 
+/**
+ * Sent when the socket has connected and both WebSocket and SocketIo 
+ * handshaking has completed.
+ */
 - (void)socketIoClientDidConnect:(SocketIoClient *)client;
+
+/**
+ * If the socket closes due to error or a call to -disconnect, this method is 
+ * called. This is the last call |delegate| will receive unless the socket is
+ * reconnected with a call to -connect.
+ */
 - (void)socketIoClientDidDisconnect:(SocketIoClient *)client;
 
-@optional
-
 - (void)socketIoClient:(SocketIoClient *)client didSendMessage:(NSString *)message isJSON:(BOOL)isJSON;
+
+/**
+ * Called before socketIoClientDidDisconnect: if, and only if, the connection is 
+ * closing due to a transport error. The domain of the error will be 
+ * WebSocketErrorDomain or SocketIoClientErrorDomain.
+ */
+- (void)socketIoClient:(SocketIoClient *)client didFailWithError:(NSError *)error;
 
 @end
