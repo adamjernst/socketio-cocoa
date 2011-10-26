@@ -10,18 +10,22 @@
 #import "WebSocket.h"
 
 @interface SocketIoClient (FP_Private) <WebSocketDelegate>
+@property (nonatomic, retain, readwrite) NSString *sessionId;
+@property (nonatomic, readwrite) SocketIoClientState state;
 - (void)log:(NSString *)message;
 - (NSString *)encode:(NSArray *)messages;
 - (void)onDisconnect;
 - (void)onError:(NSError *)error;
+- (void)onConnectError:(NSError *)error;
 - (void)notifyMessagesSent:(NSArray *)messages;
 @end
+
+NSString *SocketIoClientErrorDomain = @"SocketIoClientErrorDomain";
 
 @implementation SocketIoClient
 
 @synthesize sessionId = _sessionId, delegate = _delegate, connectTimeout = _connectTimeout, 
-            heartbeatTimeout = _heartbeatTimeout, isConnecting = _isConnecting, 
-            isConnected = _isConnected, host = _host, port = _port;
+            heartbeatTimeout = _heartbeatTimeout, state = _state, host = _host, port = _port;
 
 - (id)initWithHost:(NSString *)host port:(NSInteger)port {
   if (self = [super init]) {
@@ -44,28 +48,41 @@
   [_host release];
   [_queue release];
   [_webSocket release];
-  self.sessionId = nil;
+  [_sessionId release];
   
   [super dealloc];
 }
 
+- (BOOL)isConnected {
+  return [self state] == SocketIoClientStateConnected;
+}
+
+- (BOOL)isConnecting {
+  return [self state] == SocketIoClientStateConnecting;
+}
+
 - (void)checkIfConnected {
-  if (!_isConnected) {
-    [self onError:[NSError errorWithDomain:SocketIoClientErrorDomain 
-                                      code:SocketIoClientErrorConnectionTimeout
-                                  userInfo:nil]];
+  if ([self state] != SocketIoClientStateConnected) {
+    // First close the socket, in case the client tries to immediately reconnect.
+    // This will not dispatch any messages to the delegate (as documented) 
+    // since state is not Connected.
     [self disconnect];
+    [self onConnectError:[NSError errorWithDomain:SocketIoClientErrorDomain 
+                                             code:SocketIoClientErrorConnectionTimeout
+                                         userInfo:nil]];
   }
 }
 
 - (void)connect {
-  if (!_isConnected) {
+  if ([self state] != SocketIoClientStateConnected) {
     
-    if (_isConnecting) {
+    if ([self state] == SocketIoClientStateConnecting) {
+      // This will cancel the connection. The delegate will not receive an error
+      // since state is still not Connected.
       [self disconnect];
     }
     
-    _isConnecting = YES;
+    [self setState:SocketIoClientStateConnecting];
     
     [_webSocket open];
     
@@ -77,21 +94,20 @@
 
 - (void)disconnect {
   [self log:@"Disconnect"];
-  
-  // First cancel the connection timeout timer, so you don't get an error after
-  // disconnecting.
-  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(checkIfConnected) object:nil];
-  
-  // Close the underlying websocket, if it's connected or connecting, which 
-  // should trigger -webSocketDidClose: when the disconnection is completed 
-  // (which will in turn call onDisconnect).
-  // If the socket is disconnected, just do the bookkeeping by calling 
-  // -onDisconnect.
-  if ([_webSocket state] == WebSocketStateDisconnected) {
-    [self onDisconnect];
-  } else {
-    [_webSocket close];
+    
+  if ([self state] == SocketIoClientStateConnecting) {
+    // Set state to Disconnected to ensure that the delegate doesn't receive 
+    // connectDidFailWithError: messages.
+    // If state is Connected, leave it that way so that you *do* receive
+    // a didDisconnectWithError: message.
+    [self setState:SocketIoClientStateDisconnected];
+    
+    // Also cancel the connection timeout timer, so you don't get an error after
+    // disconnecting.
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(checkIfConnected) object:nil];
   }
+  
+  [_webSocket close];
 }
 
 - (void)send:(NSString *)data isJSON:(BOOL)isJSON {
@@ -104,7 +120,7 @@
                            @"type",
                            nil];
   
-  if (!_isConnected) {
+  if ([self state] != SocketIoClientStateConnected) {
     [_queue addObject:message];
   } else {
     NSArray *messages = [NSArray arrayWithObject:message];
@@ -203,10 +219,24 @@
   // socketIoClientDidDisconnect: message to the delegate, but did not actually
   // close the connection, meaning the connection could miraculously reopen if
   // a message was later received.)
+  
+  // Prevent the delegate from getting a second message when the connection is 
+  // closed upon request:
+  [self setState:SocketIoClientStateDisconnected];
+  [self disconnect];
+  
+  // Send the delegate the error:
   [self onError:[NSError errorWithDomain:SocketIoClientErrorDomain 
                                     code:SocketIoClientErrorHeartbeatTimeout
                                 userInfo:nil]];
-  [self disconnect];
+}
+
+- (void)clearTimeout {
+  if (_timeout != nil) {
+    [_timeout invalidate];
+    [_timeout release];
+    _timeout = nil;
+  }
 }
 
 - (void)setTimeout {
@@ -221,13 +251,7 @@
                                              selector:@selector(onTimeout) 
                                              userInfo:nil 
                                                repeats:NO];
-  
-  if (_timeout != nil) {
-    [_timeout invalidate];
-    [_timeout release];
-    _timeout = nil;
-  }
-  
+  [self clearTimeout];
   _timeout = [t retain];
 }
 
@@ -246,8 +270,7 @@
 }
 
 - (void)onConnect {
-  _isConnected = YES;
-  _isConnecting = NO;
+  [self setState:SocketIoClientStateConnected];
   
   [self doQueue];
   
@@ -264,22 +287,16 @@
 }
 
 - (void)onDisconnect {
-  BOOL wasConnected = _isConnected;
-  
-  _isConnected = NO;
-  _isConnecting = NO;
-  self.sessionId = nil;
-  
-  if (wasConnected && [_delegate respondsToSelector:@selector(socketIoClientDidDisconnect:)]) {
-    [_delegate socketIoClientDidDisconnect:self];
+  if ([_delegate respondsToSelector:@selector(socketIoClient:didDisconnectWithError:)]) {
+    [_delegate socketIoClient:self didDisconnectWithError:nil];
   }
 }
 
 - (void)onMessage:(NSString *)message {
   [self log:[NSString stringWithFormat:@"Message: %@", message]];
   
-  if (self.sessionId == nil) {
-    self.sessionId = message;
+  if ([self sessionId] == nil) {
+    [self setSessionId:message];
     [self onConnect];
   } else if ([[message substringWithRange:NSMakeRange(0, 3)] isEqualToString:@"~h~"]) {
     [self onHeartbeat:[message substringFromIndex:3]];
@@ -306,20 +323,57 @@
 
 - (void)onError:(NSError *)error {
   if ([_delegate respondsToSelector:@selector(socketIoClient:didFailWithError:)]) {
-    [_delegate socketIoClient:self didFailWithError:error];
+    [_delegate socketIoClient:self didDisconnectWithError:error];
+  }
+}
+
+- (void)onConnectError:(NSError *)error {
+  if ([_delegate respondsToSelector:@selector(socketIoClient:connectDidFailWithError:)]) {
+    [_delegate socketIoClient:self connectDidFailWithError:error];
   }
 }
 
 #pragma mark WebSocket Delegate Methods
 
+// In case of error or socket close, it's important that we don't send the 
+// delegate the corresponding message immediately.
+// Otherwise the AsyncSocket will still be in the process of shutting down
+// its socket when the delegate receives the message. If the delegate
+// immediately retries the connection, we'll end up connecting in the middle
+// of a pending disconnection.
+// Delay with performSelector:withObject:afterDelay:.
+
 - (void)webSocket:(WebSocket *)ws didFailWithError:(NSError *)error {
   [self log:[NSString stringWithFormat:@"Connection failed with error: %@", [error localizedDescription]]];
-  [self onError:error];
+  
+  // After an error, heartbeat timeouts don't matter any more.
+  [self clearTimeout];
+  
+  if ([self state] == SocketIoClientStateConnected) {
+    // We had a fully negotiated connection, but the connection failed.
+    [self performSelector:@selector(onError:) withObject:error afterDelay:0.0];
+  } else {
+    // In this case we were connecting, but experienced a socket error.
+    [self performSelector:@selector(onConnectError:) withObject:error afterDelay:0.0];
+  }
+  [self setState:SocketIoClientStateDisconnected];
 }
 
 - (void)webSocketDidClose:(WebSocket*)webSocket {
   [self log:[NSString stringWithFormat:@"Connection closed."]];
-  [self onDisconnect];
+  
+  // We're now disconnected, so heartbeat timeouts don't matter any more.
+  [self clearTimeout];
+  
+  // If we are still connected, then we never received didFailWithError:.
+  // The user must have requested disconnection by calling -disconnect.
+  if ([self state] == SocketIoClientStateConnected) {
+    [self performSelector:@selector(onDisconnect) withObject:nil afterDelay:0.0];
+  }
+  [self setState:SocketIoClientStateDisconnected];
+
+  // Finally, clear the sessionId since the websocket is no longer connected.
+  [self setSessionId:nil];
 }
 
 - (void)webSocketDidOpen:(WebSocket *)ws {

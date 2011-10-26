@@ -27,6 +27,12 @@ enum {
   SocketIoClientErrorHeartbeatTimeout,
 };
 
+typedef enum {
+  SocketIoClientStateDisconnected,
+  SocketIoClientStateConnecting,
+  SocketIoClientStateConnected
+} SocketIoClientState;
+
 @interface SocketIoClient : NSObject {
   NSString *_host;
   NSInteger _port;
@@ -50,9 +56,8 @@ enum {
 @property (nonatomic, retain, readonly) NSString *host;
 @property (nonatomic, readonly) NSInteger port;
 
-@property (nonatomic, retain) NSString *sessionId;
-@property (nonatomic, readonly) BOOL isConnected;
-@property (nonatomic, readonly) BOOL isConnecting;
+@property (nonatomic, retain, readonly) NSString *sessionId;
+@property (nonatomic, readonly) SocketIoClientState state;
 
 @property (nonatomic, assign) id<SocketIoClientDelegate> delegate;
 
@@ -61,7 +66,19 @@ enum {
 
 - (id)initWithHost:(NSString *)host port:(NSInteger)port;
 
+/** 
+ * Attempt the connection. Delegate will receive either 
+ * -socketIoClientDidConnect: or -socketIoClient:connectDidFailWithError:,
+ * unless connection is cancelled with |disconnect|.
+ */
 - (void)connect;
+
+/**
+ * If state is SocketIoClientStateConnecting, immediately cancels the 
+ * pending connection and delegate does not receive any notification.
+ * If state is SocketIoClientStateConnected, disconnects; delegate receives
+ * socketIoClientDidDisconnect:withError:, with nil for error.
+ */
 - (void)disconnect;
 
 /**
@@ -70,6 +87,12 @@ enum {
  * of your object), and indicate whether or not you're passing a JSON object.
  */
 - (void)send:(NSString *)data isJSON:(BOOL)isJSON;
+
+/**
+ * Deprecated. Do not use.
+ */
+- (BOOL)isConnected;
+- (BOOL)isConnecting;
 
 @end
 
@@ -90,23 +113,30 @@ enum {
 - (void)socketIoClientDidConnect:(SocketIoClient *)client;
 
 /**
- * If the socket closes due to error or a call to -disconnect, this method is 
+ * If the socket was successfully opened (socketIoClientDidConnect: was called)
+ * but closes due to error or a call to -disconnect, this method is 
  * called. This is the last call |delegate| will receive unless the socket is
- * reconnected with a call to -connect.
+ * reconnected with a call to -connect. It is safe to call |connect| from this
+ * method since the socket is already closed.
+ * 
+ * If the disconnection was requested with a call to -disconnect, error will be
+ * nil. Otherwise, it will be set to the error that triggered disconnection.
+ * By the time this method is called, isConnecting and isConnected are both 
+ * already NO.
+ * 
+ * The domain of the error will be WebSocketErrorDomain or 
+ * SocketIoClientErrorDomain.
  */
-- (void)socketIoClientDidDisconnect:(SocketIoClient *)client;
-
-- (void)socketIoClient:(SocketIoClient *)client didSendMessage:(NSString *)message isJSON:(BOOL)isJSON;
+- (void)socketIoClient:(SocketIoClient *)client didDisconnectWithError:(NSError *)error;
 
 /**
- * Called if a transport error or timeout occurs. If the socket was connected
- * before the error, -isConnected will still return YES when this method is 
- * called; disconnection will occur immediately afterwards, resulting in 
- * socketIoClientDidDisconnect: being called *after* this delegate method.
- * If the socket was not connected (i.e. it was connecting), 
- * socketIoClientDidDisconnect: will not be called. The domain of the error 
- * will be WebSocketErrorDomain or SocketIoClientErrorDomain.
- */
-- (void)socketIoClient:(SocketIoClient *)client didFailWithError:(NSError *)error;
+ * If -connect was called, but the connection has failed due to a timeout, 
+ * handshaking error, other networking problem, this method is called. This is 
+ * the last call |delegate| will receive unless connection is retried with a 
+ * call to |connect|. It is safe to call |connect| from this method.
+ **/
+- (void)socketIoClient:(SocketIoClient *)client connectDidFailWithError:(NSError *)error;
+
+- (void)socketIoClient:(SocketIoClient *)client didSendMessage:(NSString *)message isJSON:(BOOL)isJSON;
 
 @end
