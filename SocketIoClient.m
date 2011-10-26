@@ -9,7 +9,7 @@
 #import "SocketIoClient.h"
 #import "WebSocket.h"
 
-@interface SocketIoClient (FP_Private) <WebSocketDelegate>
+@interface SocketIoClient () <WebSocketDelegate>
 @property (nonatomic, retain, readwrite) NSString *sessionId;
 @property (nonatomic, readwrite) SocketIoClientState state;
 - (void)log:(NSString *)message;
