@@ -99,9 +99,13 @@ enum {
 - (void)socketIoClient:(SocketIoClient *)client didSendMessage:(NSString *)message isJSON:(BOOL)isJSON;
 
 /**
- * Called before socketIoClientDidDisconnect: if, and only if, the connection is 
- * closing due to a transport error or timeout. The domain of the error will be 
- * WebSocketErrorDomain or SocketIoClientErrorDomain.
+ * Called if a transport error or timeout occurs. If the socket was connected
+ * before the error, -isConnected will still return YES when this method is 
+ * called; disconnection will occur immediately afterwards, resulting in 
+ * socketIoClientDidDisconnect: being called *after* this delegate method.
+ * If the socket was not connected (i.e. it was connecting), 
+ * socketIoClientDidDisconnect: will not be called. The domain of the error 
+ * will be WebSocketErrorDomain or SocketIoClientErrorDomain.
  */
 - (void)socketIoClient:(SocketIoClient *)client didFailWithError:(NSError *)error;
 
