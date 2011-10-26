@@ -100,7 +100,7 @@ enum {
 
 /**
  * Called before socketIoClientDidDisconnect: if, and only if, the connection is 
- * closing due to a transport error. The domain of the error will be 
+ * closing due to a transport error or timeout. The domain of the error will be 
  * WebSocketErrorDomain or SocketIoClientErrorDomain.
  */
 - (void)socketIoClient:(SocketIoClient *)client didFailWithError:(NSError *)error;

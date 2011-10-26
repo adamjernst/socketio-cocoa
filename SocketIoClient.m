@@ -77,17 +77,20 @@
 
 - (void)disconnect {
   [self log:@"Disconnect"];
-  // Close the underlying websocket, if it's connected, which should trigger
-  // -webSocketDidClose: when the disconnection is completed (which will in turn
-  // call onDisconnect).
-  // If the socket is not connected, just do the bookkeeping by calling 
+  
+  // First cancel the connection timeout timer, so you don't get an error after
+  // disconnecting.
+  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(checkIfConnected) object:nil];
+  
+  // Close the underlying websocket, if it's connected or connecting, which 
+  // should trigger -webSocketDidClose: when the disconnection is completed 
+  // (which will in turn call onDisconnect).
+  // If the socket is disconnected, just do the bookkeeping by calling 
   // -onDisconnect.
-  // Note that [_webSocket connected] is not the same as our ivar _isConnected;
-  // the latter waits for the Socketio handshake.
-  if ([_webSocket connected]) {
-    [_webSocket close];
-  } else {
+  if ([_webSocket state] == WebSocketStateDisconnected) {
     [self onDisconnect];
+  } else {
+    [_webSocket close];
   }
 }
 
@@ -200,6 +203,9 @@
   // socketIoClientDidDisconnect: message to the delegate, but did not actually
   // close the connection, meaning the connection could miraculously reopen if
   // a message was later received.)
+  [self onError:[NSError errorWithDomain:SocketIoClientErrorDomain 
+                                    code:SocketIoClientErrorHeartbeatTimeout
+                                userInfo:nil]];
   [self disconnect];
 }
 
