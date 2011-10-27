@@ -322,7 +322,7 @@ NSString *SocketIoClientErrorDomain = @"SocketIoClientErrorDomain";
 }
 
 - (void)onError:(NSError *)error {
-  if ([_delegate respondsToSelector:@selector(socketIoClient:didFailWithError:)]) {
+  if ([_delegate respondsToSelector:@selector(socketIoClient:didDisconnectWithError:)]) {
     [_delegate socketIoClient:self didDisconnectWithError:error];
   }
 }
