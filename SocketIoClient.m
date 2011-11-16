@@ -62,6 +62,8 @@ NSString *SocketIoClientErrorDomain = @"SocketIoClientErrorDomain";
 }
 
 - (void)checkIfConnected {
+  [self log:[NSString stringWithFormat:@"checkIfConnected, state is %d", [self state]]];
+  
   if ([self state] != SocketIoClientStateConnected) {
     // First close the socket, in case the client tries to immediately reconnect.
     // This will not dispatch any messages to the delegate (as documented) 
@@ -87,6 +89,7 @@ NSString *SocketIoClientErrorDomain = @"SocketIoClientErrorDomain";
     [_webSocket open];
     
     if (_connectTimeout > 0.0) {
+      [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(checkIfConnected) object:nil];
       [self performSelector:@selector(checkIfConnected) withObject:nil afterDelay:_connectTimeout];
     }
   }
@@ -246,6 +249,7 @@ NSString *SocketIoClientErrorDomain = @"SocketIoClientErrorDomain";
   // creating a new timer first (which retains self) and *then* invalidating 
   // the old one.
   
+  [self log:@"setTimeout resetting heartbeat timer"];
   NSTimer *t = [NSTimer scheduledTimerWithTimeInterval:_heartbeatTimeout
                                                target:self 
                                              selector:@selector(onTimeout) 
@@ -386,7 +390,9 @@ NSString *SocketIoClientErrorDomain = @"SocketIoClientErrorDomain";
 }
 
 - (void)log:(NSString *)message {
-  // NSLog(@"%@", message);
+#ifdef SOCKETIO_DEBUG
+  NSLog(@"%@: %@", self, message);
+#endif
 }
 
 @end
