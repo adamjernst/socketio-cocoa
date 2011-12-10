@@ -64,7 +64,7 @@ NSString *SocketIoClientErrorDomain = @"SocketIoClientErrorDomain";
 - (void)checkIfConnected {
   [self log:[NSString stringWithFormat:@"checkIfConnected, state is %d", [self state]]];
   
-  if ([self state] != SocketIoClientStateConnected) {
+  if ([self state] == SocketIoClientStateConnecting) {
     // First close the socket, in case the client tries to immediately reconnect.
     // This will not dispatch any messages to the delegate (as documented) 
     // since state is not Connected.
@@ -332,6 +332,7 @@ NSString *SocketIoClientErrorDomain = @"SocketIoClientErrorDomain";
 }
 
 - (void)onConnectError:(NSError *)error {
+  [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(checkIfConnected) object:nil];
   if ([_delegate respondsToSelector:@selector(socketIoClient:connectDidFailWithError:)]) {
     [_delegate socketIoClient:self connectDidFailWithError:error];
   }
